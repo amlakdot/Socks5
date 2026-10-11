@@ -45,7 +45,7 @@ def load_last_update_id() -> int:
     if LAST_UPDATE_FILE.exists():
         try:
             return int(LAST_UPDATE_FILE.read_text(encoding="utf-8").strip())
-        except:
+        except Exception:
             return 0
     return 0
 
@@ -53,23 +53,31 @@ def save_last_update_id(update_id: int):
     LAST_UPDATE_FILE.write_text(str(update_id) + "\n", encoding="utf-8")
 
 def commit_and_push(message: str):
+    """Commit state files. Always include [skip ci] to prevent GitHub Actions self-trigger loops (spam)."""
     try:
-        subprocess.run(["git", "config", "user.name", "Proxy Bot"], check=True)
-        subprocess.run(["git", "config", "user.email", "bot@github.com"], check=True)
-        subprocess.run(["git", "add", "sources.txt", "mode.txt", "last_update_id.txt"], check=True)
-        result = subprocess.run(["git", "diff", "--cached", "--quiet"])
+        subprocess.run(["git", "config", "user.name", "Proxy Bot"], check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "bot@github.com"], check=True, capture_output=True)
+        subprocess.run(["git", "add", "sources.txt", "mode.txt", "last_update_id.txt"], check=True, capture_output=True)
+        result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
         if result.returncode != 0:
-            subprocess.run(["git", "commit", "-m", message], check=True)
-            subprocess.run(["git", "push"], check=True)
-            log("Changes committed and pushed.")
+            # [skip ci] prevents the push from re-triggering the workflow → stops spam loop
+            full_msg = f"{message} [skip ci]"
+            subprocess.run(["git", "commit", "-m", full_msg], check=True, capture_output=True)
+            subprocess.run(["git", "push"], check=True, capture_output=True)
+            log("Changes committed and pushed (with [skip ci]).")
         else:
             log("No changes to commit.")
     except Exception as e:
         log(f"Git error: {e}")
 
-def send_message(text: str):
+def send_message(text: str) -> bool:
+    """Send text message(s). Returns True if all chunks succeeded."""
+    if not BOT_TOKEN or not CHAT_ID:
+        log("Cannot send: BOT_TOKEN or CHAT_ID missing")
+        return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     max_len = 4000
+    success = True
     for i in range(0, len(text), max_len):
         chunk = text[i:i + max_len]
         payload = {
@@ -77,10 +85,17 @@ def send_message(text: str):
             "text": chunk,
             "disable_web_page_preview": True
         }
-        r = requests.post(url, json=payload, timeout=20)
-        if not r.json().get("ok"):
-            log(f"sendMessage error: {r.text}")
-        time.sleep(0.3)
+        try:
+            r = requests.post(url, json=payload, timeout=20)
+            data = r.json()
+            if not data.get("ok"):
+                log(f"sendMessage error: {r.text}")
+                success = False
+        except Exception as e:
+            log(f"sendMessage exception: {e}")
+            success = False
+        time.sleep(0.35)  # slightly higher delay to respect Telegram rate limits
+    return success
 
 def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
     try:
@@ -232,19 +247,34 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
 
                 send_message(report)
 
+            elif cmd in ("/help", "/start"):
+                help_text = (
+                    "📖 دستورات موجود:\n\n"
+                    "/txt – ارسال به صورت متن\n"
+                    "/file – ارسال به صورت فایل\n"
+                    "/list – لیست منابع\n"
+                    "/add <url> – اضافه کردن منبع\n"
+                    "/del <شماره یا url> – حذف منبع\n"
+                    "/stat – وضعیت منابع\n"
+                    "/help – همین راهنما"
+                )
+                send_message(help_text)
+
     except Exception as e:
         log(f"Error processing commands: {e}")
 
     return sources, mode, changed, highest_update_id
 
-def send_proxies(proxies: list[str], mode: str):
+def send_proxies(proxies: list[str], mode: str) -> bool:
     content = "\n".join(proxies)
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
 
     if mode == "txt":
         header = f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}\n\n"
-        send_message(header + content)
-        log("Sent as TEXT")
+        ok = send_message(header + content)
+        if ok:
+            log("Sent as TEXT")
+        return ok
     else:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
         files = {"document": ("socks5.txt", content.encode("utf-8"))}
@@ -252,11 +282,22 @@ def send_proxies(proxies: list[str], mode: str):
             "chat_id": CHAT_ID,
             "caption": f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}"
         }
-        r = requests.post(url, data=data, files=files, timeout=40)
-        if not r.json().get("ok"):
-            log(f"sendDocument error: {r.text}")
-            raise Exception("Failed to send document")
-        log("Sent as FILE")
+        try:
+            r = requests.post(url, data=data, files=files, timeout=40)
+            resp = r.json()
+            if not resp.get("ok"):
+                log(f"sendDocument error: {r.text}")
+                # fallback to text if document fails (e.g. size / temporary error)
+                log("Falling back to TEXT mode...")
+                header = f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}\n\n"
+                return send_message(header + content)
+            log("Sent as FILE")
+            return True
+        except Exception as e:
+            log(f"sendDocument exception: {e}")
+            log("Falling back to TEXT mode...")
+            header = f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}\n\n"
+            return send_message(header + content)
 
 def main():
     log("=== Starting Proxy Sender ===")
@@ -286,7 +327,7 @@ def main():
     for src in sources:
         proxies, _ = get_proxies_from_url(src)
         all_proxies.update(proxies)
-        log(f"  → {len(proxies)} from {src[:50]}...")
+        log(f"  → {len(proxies)} from {src[:60]}...")
 
     proxies = sorted(all_proxies)
     log(f"Total unique proxies: {len(proxies)}")
@@ -297,7 +338,10 @@ def main():
         sys.exit(0)
 
     try:
-        send_proxies(proxies, mode)
+        ok = send_proxies(proxies, mode)
+        if not ok:
+            log("ERROR: Failed to send proxies to Telegram")
+            sys.exit(1)
     except Exception as e:
         log(f"ERROR while sending: {e}")
         sys.exit(1)
