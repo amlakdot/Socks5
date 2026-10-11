@@ -2,8 +2,11 @@ name: Send Proxies Hourly
 
 on:
   schedule:
-    - cron: '0 * * * *'   # هر ساعت یک‌بار
-  workflow_dispatch:       # امکان اجرای دستی
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # برای اینکه بتواند sources.txt و mode.txt را آپدیت کند
 
 jobs:
   send-proxies:
@@ -24,4 +27,5 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python send_proxies.py
