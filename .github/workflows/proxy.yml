@@ -2,8 +2,8 @@ name: Send Proxies Hourly
 
 on:
   schedule:
-    - cron: '17 * * * *'   # هر ساعت در دقیقه ۱۷ (کمتر شلوغ است)
-  workflow_dispatch:       # امکان اجرای دستی
+    - cron: '*/10 * * * *'   # هر ۱۰ دقیقه یک‌بار (برای تست)
+  workflow_dispatch:
 
 permissions:
   contents: write
