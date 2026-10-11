@@ -11,6 +11,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 SOURCES_FILE = Path("sources.txt")
 MODE_FILE = Path("mode.txt")
+LAST_UPDATE_FILE = Path("last_update_id.txt")
 
 DEFAULT_SOURCES = [
     "https://raw.githubusercontent.com/monosans/proxy-list/refs/heads/main/proxies/socks5.txt",
@@ -40,11 +41,22 @@ def load_mode() -> str:
 def save_mode(mode: str):
     MODE_FILE.write_text(mode + "\n", encoding="utf-8")
 
+def load_last_update_id() -> int:
+    if LAST_UPDATE_FILE.exists():
+        try:
+            return int(LAST_UPDATE_FILE.read_text(encoding="utf-8").strip())
+        except:
+            return 0
+    return 0
+
+def save_last_update_id(update_id: int):
+    LAST_UPDATE_FILE.write_text(str(update_id) + "\n", encoding="utf-8")
+
 def commit_and_push(message: str):
     try:
         subprocess.run(["git", "config", "user.name", "Proxy Bot"], check=True)
         subprocess.run(["git", "config", "user.email", "bot@github.com"], check=True)
-        subprocess.run(["git", "add", "sources.txt", "mode.txt"], check=True)
+        subprocess.run(["git", "add", "sources.txt", "mode.txt", "last_update_id.txt"], check=True)
         result = subprocess.run(["git", "diff", "--cached", "--quiet"])
         if result.returncode != 0:
             subprocess.run(["git", "commit", "-m", message], check=True)
@@ -85,18 +97,34 @@ def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
         log(f"Error fetching {url}: {e}")
         return [], None
 
-def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, bool]:
+def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, bool, int]:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     changed = False
+    last_update_id = load_last_update_id()
+    highest_update_id = last_update_id
 
     try:
-        r = requests.get(url, params={"limit": 50, "timeout": 5}, timeout=15)
+        # فقط آپدیت‌های جدید بعد از آخرین update_id
+        params = {
+            "offset": last_update_id + 1,
+            "limit": 50,
+            "timeout": 5
+        }
+        r = requests.get(url, params=params, timeout=15)
         data = r.json()
+
         if not data.get("ok"):
             log(f"getUpdates failed: {data}")
-            return sources, mode, False
+            return sources, mode, False, last_update_id
 
-        for update in data.get("result", []):
+        updates = data.get("result", [])
+        log(f"Received {len(updates)} new updates (after update_id {last_update_id})")
+
+        for update in updates:
+            update_id = update.get("update_id", 0)
+            if update_id > highest_update_id:
+                highest_update_id = update_id
+
             msg = update.get("message") or update.get("edited_message")
             if not msg:
                 continue
@@ -130,10 +158,10 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                 if not sources:
                     send_message("📭 هیچ منبعی وجود ندارد.")
                 else:
-                    msg = "📋 لیست منابع فعلی:\n\n"
+                    msg_text = "📋 لیست منابع فعلی:\n\n"
                     for i, src in enumerate(sources, 1):
-                        msg += f"{i}. `{src}`\n"
-                    send_message(msg)
+                        msg_text += f"{i}. `{src}`\n"
+                    send_message(msg_text)
 
             elif cmd == "/add":
                 if len(parts) < 2:
@@ -207,7 +235,7 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
     except Exception as e:
         log(f"Error processing commands: {e}")
 
-    return sources, mode, changed
+    return sources, mode, changed, highest_update_id
 
 def send_proxies(proxies: list[str], mode: str):
     content = "\n".join(proxies)
@@ -241,12 +269,18 @@ def main():
     mode = load_mode()
     log(f"Loaded {len(sources)} sources | mode = {mode}")
 
-    sources, mode, changed = process_commands(sources, mode)
+    sources, mode, changed, highest_update_id = process_commands(sources, mode)
+
+    # ذخیره آخرین update_id حتی اگر دستوری نبود
+    last_id = load_last_update_id()
+    if highest_update_id > last_id:
+        save_last_update_id(highest_update_id)
+        changed = True
 
     if changed:
         save_sources(sources)
         save_mode(mode)
-        commit_and_push("chore: update sources or mode via Telegram")
+        commit_and_push("chore: update sources / mode / last_update_id")
 
     all_proxies = set()
     for src in sources:
