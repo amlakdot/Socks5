@@ -1,0 +1,2 @@
+https://raw.githubusercontent.com/monosans/proxy-list/refs/heads/main/proxies/socks5.txt
+https://raw.githubusercontent.com/databay-labs/free-proxy-list/refs/heads/master/socks5.txt
