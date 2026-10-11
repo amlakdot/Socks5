@@ -1,19 +1,15 @@
-name: Send Proxies Hourly
+name: Send SOCKS5 Proxies
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # هر ۱۰ دقیقه یک‌بار (برای تست)
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    - cron: '0 */2 * * *'   # هر ۲ ساعت یک‌بار (می‌تونی تغییر بدی)
+  workflow_dispatch:         # دکمه اجرای دستی
 
 jobs:
-  send-proxies:
+  send:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -23,9 +19,8 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run proxy sender
+      - name: Run script
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python send_proxies.py
