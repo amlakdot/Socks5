@@ -1,0 +1,27 @@
+name: Send Proxies Hourly
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # هر ساعت یک‌بار
+  workflow_dispatch:       # امکان اجرای دستی
+
+jobs:
+  send-proxies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run proxy sender
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python send_proxies.py
