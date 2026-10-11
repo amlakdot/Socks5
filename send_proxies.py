@@ -8,7 +8,6 @@ from pathlib import Path
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 SOURCES_FILE = Path("sources.txt")
 MODE_FILE = Path("mode.txt")
@@ -42,12 +41,10 @@ def save_mode(mode: str):
     MODE_FILE.write_text(mode + "\n", encoding="utf-8")
 
 def commit_and_push(message: str):
-    """تغییرات را کامیت و پوش می‌کند"""
     try:
         subprocess.run(["git", "config", "user.name", "Proxy Bot"], check=True)
         subprocess.run(["git", "config", "user.email", "bot@github.com"], check=True)
         subprocess.run(["git", "add", "sources.txt", "mode.txt"], check=True)
-        # فقط اگر تغییری وجود داشته باشد کامیت کند
         result = subprocess.run(["git", "diff", "--cached", "--quiet"])
         if result.returncode != 0:
             subprocess.run(["git", "commit", "-m", message], check=True)
@@ -60,7 +57,6 @@ def commit_and_push(message: str):
 
 def send_message(text: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    # تقسیم پیام‌های خیلی طولانی
     max_len = 4000
     for i in range(0, len(text), max_len):
         chunk = text[i:i + max_len]
@@ -75,7 +71,6 @@ def send_message(text: str):
         time.sleep(0.3)
 
 def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
-    """برمی‌گرداند: (لیست پروکسی‌ها, آخرین زمان آپدیت یا None)"""
     try:
         r = requests.get(url, timeout=20)
         r.raise_for_status()
@@ -84,7 +79,6 @@ def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
             line = line.strip()
             if line and not line.startswith("#") and ":" in line:
                 proxies.append(line)
-        
         last_modified = r.headers.get("Last-Modified")
         return proxies, last_modified
     except Exception as e:
@@ -92,10 +86,6 @@ def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
         return [], None
 
 def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, bool]:
-    """
-    دستورات تلگرام را پردازش می‌کند.
-    برمی‌گرداند: (sources جدید, mode جدید, آیا تغییری رخ داده)
-    """
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     changed = False
 
@@ -117,16 +107,14 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
             if not text:
                 continue
 
-            lower = text.lower()
             parts = text.split(maxsplit=1)
             cmd = parts[0].lower()
 
-            # ---------- /txt و /file ----------
             if cmd == "/txt":
                 if mode != "txt":
                     mode = "txt"
                     changed = True
-                    send_message("✅ حالت ارسال به **متن** تغییر کرد.")
+                    send_message("✅ حالت ارسال به متن تغییر کرد.")
                 else:
                     send_message("ℹ️ حالت ارسال هم‌اکنون روی متن است.")
 
@@ -134,24 +122,22 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                 if mode != "file":
                     mode = "file"
                     changed = True
-                    send_message("✅ حالت ارسال به **فایل** تغییر کرد.")
+                    send_message("✅ حالت ارسال به فایل تغییر کرد.")
                 else:
                     send_message("ℹ️ حالت ارسال هم‌اکنون روی فایل است.")
 
-            # ---------- /list ----------
             elif cmd == "/list":
                 if not sources:
                     send_message("📭 هیچ منبعی وجود ندارد.")
                 else:
-                    msg = "📋 **لیست منابع فعلی:**\n\n"
+                    msg = "📋 لیست منابع فعلی:\n\n"
                     for i, src in enumerate(sources, 1):
                         msg += f"{i}. `{src}`\n"
                     send_message(msg)
 
-            # ---------- /add ----------
             elif cmd == "/add":
                 if len(parts) < 2:
-                    send_message("❌ استفاده صحیح:\n`/add https://example.com/proxies.txt`")
+                    send_message("❌ استفاده صحیح:\n/add https://example.com/proxies.txt")
                     continue
                 new_url = parts[1].strip()
                 if not new_url.startswith("http"):
@@ -164,14 +150,12 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                     changed = True
                     send_message(f"✅ منبع اضافه شد:\n`{new_url}`")
 
-            # ---------- /del ----------
             elif cmd == "/del":
                 if len(parts) < 2:
-                    send_message("❌ استفاده صحیح:\n`/del 2` یا `/del https://...`")
+                    send_message("❌ استفاده صحیح:\n/del 2   یا   /del https://...")
                     continue
                 target = parts[1].strip()
 
-                # حذف بر اساس شماره
                 if target.isdigit():
                     idx = int(target) - 1
                     if 0 <= idx < len(sources):
@@ -181,7 +165,6 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                     else:
                         send_message("❌ شماره نامعتبر است.")
                 else:
-                    # حذف بر اساس آدرس
                     if target in sources:
                         sources.remove(target)
                         changed = True
@@ -189,14 +172,13 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                     else:
                         send_message("❌ این منبع پیدا نشد.")
 
-            # ---------- /stat ----------
             elif cmd == "/stat":
                 if not sources:
                     send_message("📭 هیچ منبعی برای بررسی وجود ندارد.")
                     continue
 
                 send_message("⏳ در حال بررسی منابع... لطفاً صبر کنید.")
-                report = "📊 **وضعیت منابع:**\n\n"
+                report = "📊 وضعیت منابع:\n\n"
                 now = datetime.now(timezone.utc)
 
                 for i, src in enumerate(sources, 1):
@@ -205,7 +187,6 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
 
                     if last_mod:
                         try:
-                            # مثال: Wed, 11 Oct 2026 08:30:00 GMT
                             dt = datetime.strptime(last_mod, "%a, %d %b %Y %H:%M:%S %Z")
                             dt = dt.replace(tzinfo=timezone.utc)
                             hours_ago = (now - dt).total_seconds() / 3600
@@ -216,10 +197,10 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                         time_info = "نامشخص"
 
                     status = "✅" if count > 0 else "❌"
-                    report += f"{status} **منبع {i}**\n"
+                    report += f"{status} منبع {i}\n"
                     report += f"• تعداد: `{count}`\n"
                     report += f"• آخرین آپدیت: `{time_info}`\n"
-                    report += f"• آدرس: `{src[:60]}{'...' if len(src) > 60 else ''}`\n\n"
+                    report += f"• آدرس: `{src[:70]}{'...' if len(src) > 70 else ''}`\n\n"
 
                 send_message(report)
 
@@ -260,7 +241,6 @@ def main():
     mode = load_mode()
     log(f"Loaded {len(sources)} sources | mode = {mode}")
 
-    # پردازش دستورات کاربر
     sources, mode, changed = process_commands(sources, mode)
 
     if changed:
@@ -268,7 +248,6 @@ def main():
         save_mode(mode)
         commit_and_push("chore: update sources or mode via Telegram")
 
-    # گرفتن پروکسی‌ها از همه منابع
     all_proxies = set()
     for src in sources:
         proxies, _ = get_proxies_from_url(src)
@@ -283,7 +262,6 @@ def main():
         send_message("⚠️ هیچ پروکسی‌ای از منابع فعلی دریافت نشد.")
         sys.exit(0)
 
-    # ارسال نهایی
     try:
         send_proxies(proxies, mode)
     except Exception as e:
