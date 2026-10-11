@@ -2,11 +2,11 @@ name: Send Proxies Hourly
 
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    - cron: '17 * * * *'   # هر ساعت در دقیقه ۱۷ (کمتر شلوغ است)
+  workflow_dispatch:       # امکان اجرای دستی
 
 permissions:
-  contents: write   # برای اینکه بتواند sources.txt و mode.txt را آپدیت کند
+  contents: write
 
 jobs:
   send-proxies:
