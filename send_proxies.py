@@ -12,6 +12,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 SOURCES_FILE = Path("sources.txt")
 MODE_FILE = Path("mode.txt")
 LAST_UPDATE_FILE = Path("last_update_id.txt")
+ALL_PROXIES_FILE = Path("all_proxies.txt")  # تاریخچه همه پروکسی‌های دیده‌شده
 
 DEFAULT_SOURCES = [
     "https://raw.githubusercontent.com/monosans/proxy-list/refs/heads/main/proxies/socks5.txt",
@@ -52,12 +53,33 @@ def load_last_update_id() -> int:
 def save_last_update_id(update_id: int):
     LAST_UPDATE_FILE.write_text(str(update_id) + "\n", encoding="utf-8")
 
+def load_known_proxies() -> set[str]:
+    """بارگذاری پروکسی‌های قبلی از فایل تاریخچه"""
+    if ALL_PROXIES_FILE.exists():
+        return {
+            line.strip()
+            for line in ALL_PROXIES_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+    return set()
+
+def save_known_proxies(proxies: set[str]):
+    """ذخیره کل پروکسی‌های دیده‌شده (مرتب‌شده)"""
+    sorted_list = sorted(proxies)
+    ALL_PROXIES_FILE.write_text("\n".join(sorted_list) + "\n", encoding="utf-8")
+    log(f"Saved {len(sorted_list)} known proxies to {ALL_PROXIES_FILE}")
+
 def commit_and_push(message: str):
     """Commit state files. Always include [skip ci] to prevent GitHub Actions self-trigger loops (spam)."""
     try:
         subprocess.run(["git", "config", "user.name", "Proxy Bot"], check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "bot@github.com"], check=True, capture_output=True)
-        subprocess.run(["git", "add", "sources.txt", "mode.txt", "last_update_id.txt"], check=True, capture_output=True)
+        # شامل فایل تاریخچه پروکسی‌ها هم می‌شود
+        subprocess.run(
+            ["git", "add", "sources.txt", "mode.txt", "last_update_id.txt", "all_proxies.txt"],
+            check=True,
+            capture_output=True,
+        )
         result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
         if result.returncode != 0:
             # [skip ci] prevents the push from re-triggering the workflow → stops spam loop
@@ -96,6 +118,29 @@ def send_message(text: str) -> bool:
             success = False
         time.sleep(0.35)  # slightly higher delay to respect Telegram rate limits
     return success
+
+def send_document(filename: str, content: str, caption: str) -> bool:
+    """ارسال یک فایل به تلگرام"""
+    if not BOT_TOKEN or not CHAT_ID:
+        log("Cannot send: BOT_TOKEN or CHAT_ID missing")
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    files = {"document": (filename, content.encode("utf-8"))}
+    data = {
+        "chat_id": CHAT_ID,
+        "caption": caption
+    }
+    try:
+        r = requests.post(url, data=data, files=files, timeout=40)
+        resp = r.json()
+        if not resp.get("ok"):
+            log(f"sendDocument error ({filename}): {r.text}")
+            return False
+        log(f"Sent document: {filename}")
+        return True
+    except Exception as e:
+        log(f"sendDocument exception ({filename}): {e}")
+        return False
 
 def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
     try:
@@ -171,12 +216,10 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
 
             elif cmd == "/list":
                 if not sources:
-                    send_message("📭 هیچ منبعی وجود ندارد.")
+                    send_message("📭 هیچ منبعی تعریف نشده.")
                 else:
-                    msg_text = "📋 لیست منابع فعلی:\n\n"
-                    for i, src in enumerate(sources, 1):
-                        msg_text += f"{i}. `{src}`\n"
-                    send_message(msg_text)
+                    lines = [f"{i}. `{s}`" for i, s in enumerate(sources, 1)]
+                    send_message("📋 لیست منابع:\n\n" + "\n".join(lines))
 
             elif cmd == "/add":
                 if len(parts) < 2:
@@ -184,10 +227,10 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
                     continue
                 new_url = parts[1].strip()
                 if not new_url.startswith("http"):
-                    send_message("❌ آدرس باید با http یا https شروع شود.")
+                    send_message("❌ آدرس باید با http شروع شود.")
                     continue
                 if new_url in sources:
-                    send_message("⚠️ این منبع از قبل وجود دارد.")
+                    send_message("ℹ️ این منبع قبلاً وجود دارد.")
                 else:
                     sources.append(new_url)
                     changed = True
@@ -265,39 +308,65 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
 
     return sources, mode, changed, highest_update_id
 
-def send_proxies(proxies: list[str], mode: str) -> bool:
-    content = "\n".join(proxies)
+def send_proxies(new_proxies: list[str], all_proxies: list[str], mode: str) -> bool:
+    """
+    ارسال دو فایل:
+      - جدید.txt  → فقط پروکسی‌های جدید
+      - کل.txt    → کل پروکسی‌های استخراج‌شده این دور
+    """
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    success = True
+
+    # --- فایل جدید ---
+    new_content = "\n".join(new_proxies) if new_proxies else ""
+    new_caption = (
+        f"🆕 پروکسی‌های جدید • {now_str}\n"
+        f"تعداد جدید: {len(new_proxies)}"
+    )
+
+    # --- فایل کل ---
+    all_content = "\n".join(all_proxies)
+    all_caption = (
+        f"📦 کل پروکسی‌ها • {now_str}\n"
+        f"تعداد کل: {len(all_proxies)}"
+    )
 
     if mode == "txt":
-        header = f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}\n\n"
-        ok = send_message(header + content)
-        if ok:
-            log("Sent as TEXT")
-        return ok
+        # حالت متن: هر کدام را به صورت پیام متنی می‌فرستیم
+        if new_proxies:
+            header_new = f"🆕 پروکسی‌های جدید • {now_str}\nتعداد: {len(new_proxies)}\n\n"
+            ok1 = send_message(header_new + new_content)
+        else:
+            ok1 = send_message(f"🆕 هیچ پروکسی جدیدی پیدا نشد • {now_str}")
+            log("No new proxies to send as text")
+
+        header_all = f"📦 کل پروکسی‌ها • {now_str}\nتعداد: {len(all_proxies)}\n\n"
+        ok2 = send_message(header_all + all_content)
+
+        success = ok1 and ok2
+        if success:
+            log("Sent both as TEXT")
+        return success
+
     else:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-        files = {"document": ("socks5.txt", content.encode("utf-8"))}
-        data = {
-            "chat_id": CHAT_ID,
-            "caption": f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}"
-        }
-        try:
-            r = requests.post(url, data=data, files=files, timeout=40)
-            resp = r.json()
-            if not resp.get("ok"):
-                log(f"sendDocument error: {r.text}")
-                # fallback to text if document fails (e.g. size / temporary error)
-                log("Falling back to TEXT mode...")
-                header = f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}\n\n"
-                return send_message(header + content)
-            log("Sent as FILE")
-            return True
-        except Exception as e:
-            log(f"sendDocument exception: {e}")
-            log("Falling back to TEXT mode...")
-            header = f"🔄 SOCKS5 Proxies • {now_str}\nتعداد: {len(proxies)}\n\n"
-            return send_message(header + content)
+        # حالت فایل: دو سند جداگانه
+        # اول فایل جدید
+        if new_proxies:
+            ok1 = send_document("جدید.txt", new_content, new_caption)
+        else:
+            # حتی اگر خالی باشد، یک پیام اطلاع‌رسانی می‌فرستیم
+            ok1 = send_message(f"🆕 هیچ پروکسی جدیدی پیدا نشد • {now_str}")
+            log("No new proxies – skipped sending جدید.txt")
+
+        time.sleep(0.5)  # کمی فاصله بین دو ارسال
+
+        # بعد فایل کل
+        ok2 = send_document("کل.txt", all_content, all_caption)
+
+        success = ok1 and ok2
+        if success:
+            log("Sent both as FILE (جدید + کل)")
+        return success
 
 def main():
     log("=== Starting Proxy Sender ===")
@@ -321,30 +390,49 @@ def main():
     if changed:
         save_sources(sources)
         save_mode(mode)
+        # کامیت اولیه فقط برای sources/mode/update_id (all_proxies بعداً)
         commit_and_push("chore: update sources / mode / last_update_id")
 
-    all_proxies = set()
+    # ========== استخراج پروکسی‌ها ==========
+    all_proxies_set: set[str] = set()
     for src in sources:
         proxies, _ = get_proxies_from_url(src)
-        all_proxies.update(proxies)
+        all_proxies_set.update(proxies)
         log(f"  → {len(proxies)} from {src[:60]}...")
 
-    proxies = sorted(all_proxies)
-    log(f"Total unique proxies: {len(proxies)}")
+    current_proxies = sorted(all_proxies_set)
+    log(f"Total unique proxies this run: {len(current_proxies)}")
 
-    if not proxies:
+    if not current_proxies:
         log("No proxies found!")
         send_message("⚠️ هیچ پروکسی‌ای از منابع فعلی دریافت نشد.")
         sys.exit(0)
 
+    # ========== مقایسه با تاریخچه ==========
+    known = load_known_proxies()
+    log(f"Known proxies from previous runs: {len(known)}")
+
+    new_set = all_proxies_set - known
+    new_proxies = sorted(new_set)
+    log(f"New proxies (not seen before): {len(new_proxies)}")
+
+    # ========== ارسال دو فایل ==========
     try:
-        ok = send_proxies(proxies, mode)
+        ok = send_proxies(new_proxies, current_proxies, mode)
         if not ok:
             log("ERROR: Failed to send proxies to Telegram")
             sys.exit(1)
     except Exception as e:
         log(f"ERROR while sending: {e}")
         sys.exit(1)
+
+    # ========== به‌روزرسانی تاریخچه ==========
+    # جدیدها را به لیست قبلی اضافه می‌کنیم
+    updated_known = known | all_proxies_set
+    save_known_proxies(updated_known)
+
+    # کامیت فایل تاریخچه
+    commit_and_push(f"chore: update all_proxies.txt (+{len(new_proxies)} new)")
 
     log("=== Finished successfully ===")
 
