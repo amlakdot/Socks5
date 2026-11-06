@@ -95,28 +95,51 @@ def save_known_proxies(proxies: set[str]):
     ALL_PROXIES_FILE.write_text("\n".join(sorted_list) + "\n", encoding="utf-8")
     log(f"Saved {len(sorted_list)} known proxies to {ALL_PROXIES_FILE}")
 
+def _run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    """اجرای دستور git با لاگ خطای واضح"""
+    r = subprocess.run(args, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed ({r.returncode}): {err}")
+    return r
+
+
 def commit_and_push(message: str):
-    """Commit state files. Always include [skip ci] to prevent GitHub Actions self-trigger loops (spam)."""
+    """
+    Commit + push فایل‌های state.
+    همیشه [skip ci] می‌گذارد تا workflow دوباره تریگر نشود.
+    """
     try:
-        subprocess.run(["git", "config", "user.name", "Proxy Bot"], check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "bot@github.com"], check=True, capture_output=True)
-        # شامل فایل تاریخچه پروکسی‌ها هم می‌شود
-        subprocess.run(
-            ["git", "add", "sources.txt", "mode.txt", "last_update_id.txt", "all_proxies.txt"],
-            check=True,
-            capture_output=True,
-        )
-        result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
-        if result.returncode != 0:
-            # [skip ci] prevents the push from re-triggering the workflow → stops spam loop
-            full_msg = f"{message} [skip ci]"
-            subprocess.run(["git", "commit", "-m", full_msg], check=True, capture_output=True)
-            subprocess.run(["git", "push"], check=True, capture_output=True)
-            log("Changes committed and pushed (with [skip ci]).")
-        else:
+        _run_git(["git", "config", "user.name", "Proxy Bot"])
+        _run_git(["git", "config", "user.email", "bot@github.com"])
+
+        # فقط فایل‌هایی که وجود دارند را add کن
+        files = ["sources.txt", "mode.txt", "last_update_id.txt", "all_proxies.txt"]
+        existing = [f for f in files if Path(f).exists()]
+        if not existing:
+            log("No state files to commit.")
+            return
+
+        _run_git(["git", "add", "--"] + existing)
+
+        # آیا چیزی برای کامیت هست؟
+        diff = _run_git(["git", "diff", "--cached", "--quiet"], check=False)
+        if diff.returncode == 0:
             log("No changes to commit.")
+            return
+
+        full_msg = f"{message} [skip ci]"
+        _run_git(["git", "commit", "-m", full_msg])
+
+        # pull --rebase برای جلوگیری از non-fast-forward
+        pull = _run_git(["git", "pull", "--rebase", "--autostash"], check=False)
+        if pull.returncode != 0:
+            log(f"git pull --rebase warning: {(pull.stderr or pull.stdout or '').strip()}")
+
+        _run_git(["git", "push"])
+        log("Changes committed and pushed (with [skip ci]).")
     except Exception as e:
-        log(f"Git error: {e}")
+        log(f"Git error (history may NOT persist): {e}")
 
 def send_message(text: str) -> bool:
     """Send text message(s). Returns True if all chunks succeeded."""
