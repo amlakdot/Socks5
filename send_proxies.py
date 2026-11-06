@@ -53,15 +53,41 @@ def load_last_update_id() -> int:
 def save_last_update_id(update_id: int):
     LAST_UPDATE_FILE.write_text(str(update_id) + "\n", encoding="utf-8")
 
+def normalize_proxy(line: str) -> str | None:
+    """
+    هر فرمتی را به شکل ساده host:port تبدیل می‌کند.
+    مثال:
+      socks5://45.74.31.41:10655  →  45.74.31.41:10655
+      http://user:pass@1.2.3.4:8080  →  1.2.3.4:8080
+      45.74.31.41:10655  →  45.74.31.41:10655
+    """
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    # حذف اسکیم (socks5://, http://, ...)
+    if "://" in line:
+        line = line.split("://", 1)[1]
+    # حذف user:pass@
+    if "@" in line:
+        line = line.split("@", 1)[1]
+    # حذف مسیر یا پارامتر اضافی بعد از پورت
+    line = line.split("/", 1)[0].split("?", 1)[0].strip()
+    if not line or ":" not in line:
+        return None
+    return line
+
+
 def load_known_proxies() -> set[str]:
-    """بارگذاری پروکسی‌های قبلی از فایل تاریخچه"""
+    """بارگذاری پروکسی‌های قبلی از فایل تاریخچه (نرمال‌شده)"""
     if ALL_PROXIES_FILE.exists():
-        return {
-            line.strip()
-            for line in ALL_PROXIES_FILE.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.startswith("#")
-        }
+        result = set()
+        for line in ALL_PROXIES_FILE.read_text(encoding="utf-8").splitlines():
+            n = normalize_proxy(line)
+            if n:
+                result.add(n)
+        return result
     return set()
+
 
 def save_known_proxies(proxies: set[str]):
     """ذخیره کل پروکسی‌های دیده‌شده (مرتب‌شده)"""
@@ -148,9 +174,9 @@ def get_proxies_from_url(url: str) -> tuple[list[str], str | None]:
         r.raise_for_status()
         proxies = []
         for line in r.text.splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and ":" in line:
-                proxies.append(line)
+            n = normalize_proxy(line)
+            if n:
+                proxies.append(n)
         last_modified = r.headers.get("Last-Modified")
         return proxies, last_modified
     except Exception as e:
