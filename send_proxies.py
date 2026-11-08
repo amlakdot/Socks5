@@ -392,64 +392,69 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
     return sources, mode, changed, highest_update_id
 
 
-def send_proxies(new_proxies: list[str], all_proxies: list[str], mode: str) -> bool:
+def send_proxies(
+    new_proxies: list[str],
+    current_proxies: list[str],
+    archive_proxies: list[str],
+    mode: str,
+) -> bool:
     """
-    ارسال دو فایل:
-      - جدید.txt  → فقط پروکسی‌های جدید
-      - کل.txt    → کل پروکسی‌های استخراج‌شده این دور
+    ارسال سه فایل:
+      - جدید.txt   → فقط پروکسی‌های جدید این دور
+      - کل.txt     → کل پروکسی‌های استخراج‌شده از منابع این دور
+      - آرشیو.txt  → کل تاریخچه (همه پروکسی‌های دیده‌شده تا الان)
     """
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    success = True
 
-    # --- فایل جدید ---
     new_content = "\n".join(new_proxies) if new_proxies else ""
-    new_caption = (
-        f"🆕 پروکسی‌های جدید • {now_str}\n"
-        f"تعداد جدید: {len(new_proxies)}"
-    )
+    current_content = "\n".join(current_proxies)
+    archive_content = "\n".join(archive_proxies)
 
-    # --- فایل کل ---
-    all_content = "\n".join(all_proxies)
-    all_caption = (
-        f"📦 کل پروکسی‌ها • {now_str}\n"
-        f"تعداد کل: {len(all_proxies)}"
-    )
+    new_caption = f"🆕 پروکسی‌های جدید • {now_str}\nتعداد جدید: {len(new_proxies)}"
+    current_caption = f"📦 کل پروکسی‌ها (این دور) • {now_str}\nتعداد: {len(current_proxies)}"
+    archive_caption = f"🗄 آرشیو کامل • {now_str}\nتعداد آرشیو: {len(archive_proxies)}"
 
     if mode == "txt":
-        # حالت متن: هر کدام را به صورت پیام متنی می‌فرستیم
+        # حالت متن (برای آرشیو بزرگ فقط خلاصه می‌فرستیم)
         if new_proxies:
-            header_new = f"🆕 پروکسی‌های جدید • {now_str}\nتعداد: {len(new_proxies)}\n\n"
-            ok1 = send_message(header_new + new_content)
+            ok1 = send_message(
+                f"🆕 پروکسی‌های جدید • {now_str}\nتعداد: {len(new_proxies)}\n\n{new_content}"
+            )
         else:
             ok1 = send_message(f"🆕 هیچ پروکسی جدیدی پیدا نشد • {now_str}")
             log("No new proxies to send as text")
 
-        header_all = f"📦 کل پروکسی‌ها • {now_str}\nتعداد: {len(all_proxies)}\n\n"
-        ok2 = send_message(header_all + all_content)
+        ok2 = send_message(
+            f"📦 کل پروکسی‌ها (این دور) • {now_str}\nتعداد: {len(current_proxies)}\n\n{current_content}"
+        )
 
-        success = ok1 and ok2
+        ok3 = send_message(
+            f"🗄 آرشیو کامل • {now_str}\nتعداد آرشیو: {len(archive_proxies)}\n"
+            f"(به خاطر حجم بالا فقط تعداد نمایش داده شد – از حالت /file استفاده کنید)"
+        )
+
+        success = ok1 and ok2 and ok3
         if success:
-            log("Sent both as TEXT")
+            log("Sent all three as TEXT (archive summary only)")
         return success
 
     else:
-        # حالت فایل: دو سند جداگانه
-        # اول فایل جدید
+        # حالت فایل: سه سند جداگانه
         if new_proxies:
             ok1 = send_document("جدید.txt", new_content, new_caption)
         else:
-            # حتی اگر خالی باشد، یک پیام اطلاع‌رسانی می‌فرستیم
             ok1 = send_message(f"🆕 هیچ پروکسی جدیدی پیدا نشد • {now_str}")
             log("No new proxies – skipped sending جدید.txt")
 
-        time.sleep(0.5)  # کمی فاصله بین دو ارسال
+        time.sleep(0.4)
+        ok2 = send_document("کل.txt", current_content, current_caption)
 
-        # بعد فایل کل
-        ok2 = send_document("کل.txt", all_content, all_caption)
+        time.sleep(0.4)
+        ok3 = send_document("آرشیو.txt", archive_content, archive_caption)
 
-        success = ok1 and ok2
+        success = ok1 and ok2 and ok3
         if success:
-            log("Sent both as FILE (جدید + کل)")
+            log("Sent all three as FILE (جدید + کل + آرشیو)")
         return success
 
 
