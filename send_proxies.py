@@ -67,22 +67,14 @@ def normalize_proxy(line: str) -> str | None:
     هر فرمتی را به شکل تمیز host:port تبدیل می‌کند.
     فقط IPv4:port (یا در صورت لزوم hostname:port) استخراج می‌شود.
     خطوط کثیف (فلگ کشور، latency، ISP، هدر، آدرس کریپتو و ...) نادیده گرفته می‌شوند.
-    مثال:
-      socks5://45.74.31.41:10655              →  45.74.31.41:10655
-      http://user:pass@1.2.3.4:8080           →  1.2.3.4:8080
-      🇿🇦 102.36.127.249:1080 327ms ZA [...]  →  102.36.127.249:1080
-      45.74.31.41:10655                       →  45.74.31.41:10655
     """
     line = line.strip()
     if not line or line.startswith("#"):
         return None
-    # حذف اسکیم
     if "://" in line:
         line = line.split("://", 1)[1]
-    # حذف user:pass@
     if "@" in line:
         line = line.split("@", 1)[1]
-    # اولویت با IPv4:port
     m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\b", line)
     if m:
         ip, port = m.group(1), m.group(2)
@@ -93,7 +85,6 @@ def normalize_proxy(line: str) -> str | None:
         except ValueError:
             pass
         return None
-    # fallback: hostname:port ساده (بدون فاصله)
     m = re.search(r"([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?):(\d{1,5})\b", line)
     if m:
         host, port = m.group(1), m.group(2)
@@ -126,7 +117,6 @@ def save_known_proxies(proxies: set[str]):
 
 
 def _run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """اجرای دستور git با لاگ خطای واضح"""
     r = subprocess.run(args, capture_output=True, text=True)
     if check and r.returncode != 0:
         err = (r.stderr or r.stdout or "").strip()
@@ -135,15 +125,11 @@ def _run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess
 
 
 def commit_and_push(message: str):
-    """
-    Commit + push فایل‌های state.
-    همیشه [skip ci] می‌گذارد تا workflow دوباره تریگر نشود.
-    """
+    """Commit + push فایل‌های state. همیشه [skip ci] می‌گذارد."""
     try:
         _run_git(["git", "config", "user.name", "Proxy Bot"])
         _run_git(["git", "config", "user.email", "bot@github.com"])
 
-        # فقط فایل‌هایی که وجود دارند را add کن
         files = ["sources.txt", "mode.txt", "last_update_id.txt", "all_proxies.txt"]
         existing = [f for f in files if Path(f).exists()]
         if not existing:
@@ -152,7 +138,6 @@ def commit_and_push(message: str):
 
         _run_git(["git", "add", "--"] + existing)
 
-        # آیا چیزی برای کامیت هست؟
         diff = _run_git(["git", "diff", "--cached", "--quiet"], check=False)
         if diff.returncode == 0:
             log("No changes to commit.")
@@ -161,7 +146,6 @@ def commit_and_push(message: str):
         full_msg = f"{message} [skip ci]"
         _run_git(["git", "commit", "-m", full_msg])
 
-        # pull --rebase برای جلوگیری از non-fast-forward
         pull = _run_git(["git", "pull", "--rebase", "--autostash"], check=False)
         if pull.returncode != 0:
             log(f"git pull --rebase warning: {(pull.stderr or pull.stdout or '').strip()}")
@@ -173,7 +157,6 @@ def commit_and_push(message: str):
 
 
 def send_message(text: str) -> bool:
-    """Send text message(s). Returns True if all chunks succeeded."""
     if not BOT_TOKEN or not CHAT_ID:
         log("Cannot send: BOT_TOKEN or CHAT_ID missing")
         return False
@@ -196,12 +179,11 @@ def send_message(text: str) -> bool:
         except Exception as e:
             log(f"sendMessage exception: {e}")
             success = False
-        time.sleep(0.35)  # slightly higher delay to respect Telegram rate limits
+        time.sleep(0.35)
     return success
 
 
 def send_document(filename: str, content: str, caption: str) -> bool:
-    """ارسال یک فایل به تلگرام"""
     if not BOT_TOKEN or not CHAT_ID:
         log("Cannot send: BOT_TOKEN or CHAT_ID missing")
         return False
@@ -247,7 +229,6 @@ def process_commands(sources: list[str], mode: str) -> tuple[list[str], str, boo
     highest_update_id = last_update_id
 
     try:
-        # فقط آپدیت‌های جدید بعد از آخرین update_id
         params = {
             "offset": last_update_id + 1,
             "limit": 50,
@@ -415,7 +396,6 @@ def send_proxies(
     archive_caption = f"🗄 آرشیو کامل • {now_str}\nتعداد آرشیو: {len(archive_proxies)}"
 
     if mode == "txt":
-        # حالت متن (برای آرشیو بزرگ فقط خلاصه می‌فرستیم)
         if new_proxies:
             ok1 = send_message(
                 f"🆕 پروکسی‌های جدید • {now_str}\nتعداد: {len(new_proxies)}\n\n{new_content}"
@@ -439,7 +419,6 @@ def send_proxies(
         return success
 
     else:
-        # حالت فایل: سه سند جداگانه
         if new_proxies:
             ok1 = send_document("جدید.txt", new_content, new_caption)
         else:
@@ -471,7 +450,6 @@ def main():
 
     sources, mode, changed, highest_update_id = process_commands(sources, mode)
 
-    # ذخیره آخرین update_id حتی اگر دستوری نبود
     last_id = load_last_update_id()
     if highest_update_id > last_id:
         save_last_update_id(highest_update_id)
@@ -480,7 +458,6 @@ def main():
     if changed:
         save_sources(sources)
         save_mode(mode)
-        # کامیت اولیه فقط برای sources/mode/update_id (all_proxies بعداً)
         commit_and_push("chore: update sources / mode / last_update_id")
 
     # ========== استخراج پروکسی‌ها ==========
@@ -506,9 +483,14 @@ def main():
     new_proxies = sorted(new_set)
     log(f"New proxies (not seen before): {len(new_proxies)}")
 
-    # ========== ارسال دو فایل ==========
+    # آرشیو به‌روز (قبلی + جدیدهای این دور)
+    updated_known = known | all_proxies_set
+    archive_proxies = sorted(updated_known)
+    log(f"Archive size after this run: {len(archive_proxies)}")
+
+    # ========== ارسال سه فایل ==========
     try:
-        ok = send_proxies(new_proxies, current_proxies, mode)
+        ok = send_proxies(new_proxies, current_proxies, archive_proxies, mode)
         if not ok:
             log("ERROR: Failed to send proxies to Telegram")
             sys.exit(1)
@@ -516,12 +498,8 @@ def main():
         log(f"ERROR while sending: {e}")
         sys.exit(1)
 
-    # ========== به‌روزرسانی تاریخچه ==========
-    # جدیدها را به لیست قبلی اضافه می‌کنیم (آرشیو فقط بزرگ می‌شود)
-    updated_known = known | all_proxies_set
+    # ========== ذخیره و پوش آرشیو ==========
     save_known_proxies(updated_known)
-
-    # کامیت فایل تاریخچه
     commit_and_push(f"chore: update all_proxies.txt (+{len(new_proxies)} new)")
 
     log("=== Finished successfully ===")
